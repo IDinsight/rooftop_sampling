@@ -4,6 +4,8 @@ import s2sphere
 import geopandas as gpd
 from geopandas import GeoDataFrame
 from shapely import Point, Polygon
+import osmnx as ox
+from shapely.ops import nearest_points
 
 def count_neighbors_in_radius(gdf, radius=100):
     """
@@ -87,3 +89,37 @@ def gen_rooftop_map(poly: Polygon, gdf: GeoDataFrame) -> folium.Map:
         },
     ).add_to(m)
     return m
+
+
+# Function to find the nearest point on a road
+def get_nearest_point_on_road(point: Point, buffer_distance = 200):
+    """
+    Finds the nearest point to the given point which lies on a road using OSMs open source road data.
+
+    Parameters:
+    - point (Point): The point for which the nearest point on the road network needs to be found.
+    - buffer_distance (float): The distance within which to extract the walkable street network.
+
+    Returns:
+    - nearest_point (Point): The nearest point on the road network to the given point.
+    """
+    # Extract the walkable street network for this point within a certain distance
+    try:
+            # Attempt to extract the street network for this point within a certain distance
+            G = ox.graph_from_point((point.y, point.x), dist=buffer_distance, network_type='all')
+    except ValueError as e:
+        return None
+        
+    # Check if the graph has edges
+    if not any(G.edges):
+        return None  # Return None if no edges are found in the graph
+    
+    # Convert the graph to a GeoDataFrame of edges (roads)
+    edges = ox.graph_to_gdfs(G, nodes=False)
+
+    nearest_geom = edges.geometry.unary_union
+    nearest_point = nearest_points(nearest_geom, point)[0]
+    return nearest_point
+
+
+

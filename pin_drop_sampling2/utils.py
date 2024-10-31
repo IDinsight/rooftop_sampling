@@ -105,7 +105,6 @@ def get_nearest_point_on_road(point: Point, buffer_distance = 200):
     """
     # Extract the walkable street network for this point within a certain distance
     try:
-            # Attempt to extract the street network for this point within a certain distance
             G = ox.graph_from_point((point.y, point.x), dist=buffer_distance, network_type='all')
     except ValueError as e:
         return None

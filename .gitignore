@@ -2,6 +2,7 @@
 */output/
 */data/
 cache/
+temp*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

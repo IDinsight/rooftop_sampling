@@ -5,7 +5,15 @@ import geopandas as gpd
 from geopandas import GeoDataFrame
 from shapely import Point, Polygon
 import osmnx as ox
+from dotenv import load_dotenv
+import os
+import requests
 from shapely.ops import nearest_points
+from geopy.distance import geodesic
+
+load_dotenv()
+api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+
 
 def count_neighbors_in_radius(gdf, radius=100):
     """
@@ -92,9 +100,9 @@ def gen_rooftop_map(poly: Polygon, gdf: GeoDataFrame) -> folium.Map:
 
 
 # Function to find the nearest point on a road
-def get_nearest_point_on_road(point: Point, buffer_distance = 200):
+def get_nearest_point_on_road_free(point: Point, buffer_distance = 200):
     """
-    Finds the nearest point to the given point which lies on a road using OSMs open source road data.
+    Finds the nearest point to the given point which lies on a road using OSMs open source road data. Takes a really long time to run. 
 
     Parameters:
     - point (Point): The point for which the nearest point on the road network needs to be found.
@@ -121,4 +129,31 @@ def get_nearest_point_on_road(point: Point, buffer_distance = 200):
     return nearest_point
 
 
+def get_nearest_point_on_road(point: Point):
+    """
+    Retrieves the nearest point on the road for a given point using the Google Roads API.
 
+    Args:
+        point (Point): The point for which to find the nearest point on the road.
+
+    Returns:
+        Point: The nearest point on the road, or None if no point is found.
+
+    """
+    url = f"https://roads.googleapis.com/v1/snapToRoads?path={point.y},{point.x}&key={api_key}"
+    response = requests.get(url)
+    snapped_point = response.json().get('snappedPoints', [{}])[0].get('location')
+    return Point(snapped_point['longitude'], snapped_point['latitude']) if snapped_point else None
+
+
+def dist_in_meters(point1, point2):
+    # Check if either of the points is None
+    if point1 is None or point2 is None:
+        return None
+    
+    # Extract latitude and longitude from the Point objects
+    lat1, lon1 = point1.y, point1.x
+    lat2, lon2 = point2.y, point2.x
+
+    # Calculate the distance in meters
+    return geodesic((lat1, lon1), (lat2, lon2)).meters

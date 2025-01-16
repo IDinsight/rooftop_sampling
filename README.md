@@ -62,9 +62,9 @@ The utils module includes a helper function called get_s2_cell_id which returns 
 
 
 # 3. Merge PSU information into rooftop data
-Once you have a cleaned PSU dataset and the rooftop data, we recommend combining these two datasets to create a dataset of rooftops with PSU ID attached. The notebook add_brgy_to_rooftop.ipynb does this for Philippines data. For the Philippines, it took a while (5 minutes or so) to run this file but it made further sampling much easier.
+Once you have a cleaned PSU dataset and the rooftop data, we recommend combining these two datasets to create a dataset of rooftops with PSU ID attached. After merging the two datasets, it is useful to check the number of rooftops that weren't assigned a PSU. The notebook add_brgy_to_rooftop.ipynb does this for Philippines data. For the Philippines, it took a while (5 minutes or so) to run this file but it made further sampling much easier.
 
-Alternatively, you could first sample PSUs and then grab rooftop data for just the sampled PSUs. In practice, we have found that merging PSU and rooftop data for a small subset of sampled PSUs is not that much faster than performing the merge for the full set of PSUs.
+Alternatively, you could first sample PSUs and then grab rooftop data for just the sampled PSUs. In practice, we have found that merging PSU and rooftop data for a small subset of sampled PSUs is not that much faster than performing the merge for the full set of PSUs. And merging all of the rooftops with the PSUs in one go makes it a lot easier to perform sampling in the future and allows you to double check that there are no (or few) rooftops that are not assigned PSUs.
 
 
 # 4. Sample PSUs
@@ -97,5 +97,6 @@ To create a single Google myMaps from these files:
 3. For each of the three kml files:
     a. Click "add layer"
     b. Within the layer spec, click "import" and upload the kml file
+4. [Optional but recommended] Set the color of points_on_road and points_on_road_lines to be the same and the points_off_road to be a different color. To change the color of all elements of a layer click where it says "individual styles" in the layer spec and select "uniform style", hit escape, and click on the paint icon and select a color.
 
-We also recommend setting the color of points_on_road and points_on_road_lines to be the same and the points_off_road to be a different color. Once you have created the map, you can share with surveyors by clicking the "share" button. 
+Once you have created the map, you can share with surveyors by clicking the "share" button. 

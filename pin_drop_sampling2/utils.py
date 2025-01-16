@@ -146,6 +146,45 @@ def get_nearest_point_on_road(point: Point):
     return Point(snapped_point['longitude'], snapped_point['latitude']) if snapped_point else None
 
 
+
+def get_nearest_point_on_road_batch(points_series):
+    """
+    WARNING: THIS CODE DOESN'T WORK!!! DO NOT USE IT.
+    Get the nearest points on roads for a batch of points using Google Maps Snap to Roads API.
+    
+    Parameters:
+    points_series (GeoSeries): A GeoSeries containing points.
+    
+    Returns:
+    GeoSeries: A GeoSeries containing the nearest points on roads.
+    """
+    def call_snap_to_roads_api(points_batch):
+        url = "https://roads.googleapis.com/v1/snapToRoads"
+        params = {
+            'path': '|'.join([f"{point.y},{point.x}" for point in points_batch]),
+            'interpolate': 'false',
+            'key': api_key
+        }
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        snapped_points = response.json().get('snappedPoints', [])
+        return snapped_points
+
+    all_snapped_points = []
+    batch_size = 100
+    num_batches = (len(points_series) + batch_size - 1) // batch_size
+
+    for i in range(num_batches):
+        batch_points = points_series.iloc[i * batch_size:(i + 1) * batch_size]
+        snapped_points = call_snap_to_roads_api(batch_points)
+        all_snapped_points.extend(snapped_points)
+
+    snapped_points_coords = [(point['location']['latitude'], point['location']['longitude']) for point in all_snapped_points]
+    snapped_points_series = gpd.GeoSeries(gpd.points_from_xy([coord[1] for coord in snapped_points_coords], [coord[0] for coord in snapped_points_coords]))
+
+    return snapped_points_series
+
+
 def dist_in_meters(point1, point2):
     # Check if either of the points is None
     if point1 is None or point2 is None:

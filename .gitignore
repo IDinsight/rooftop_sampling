@@ -1,8 +1,9 @@
 # Custom
 output/*
-data/*
+data
 cache/
 temp*
+.R*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

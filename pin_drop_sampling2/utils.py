@@ -94,9 +94,10 @@ def gen_rooftop_map(poly: Polygon, gdf: GeoDataFrame) -> folium.Map:
     """
     m = folium.Map(
         location=[poly.centroid.y, poly.centroid.x],
-        zoom_start=20,
+        zoom_start=12,
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri",
+        alpha=0.01,
     )
 
     # add rooftop polygons to the map
@@ -104,11 +105,12 @@ def gen_rooftop_map(poly: Polygon, gdf: GeoDataFrame) -> folium.Map:
         folium.GeoJson(
             row.geometry,
             style_function=lambda x: {
-                "color": "red",
-                "fillColor": "red",
-                "weight": 1,
-                "fillOpacity": 0.1,
+            "color": "red",
+            "fillColor": "red",
+            "weight": 1,
+            "fillOpacity": 1.,
             },
+            marker=folium.CircleMarker(radius=.01) 
         ).add_to(m)
 
     # add the polygon to the map
@@ -116,9 +118,9 @@ def gen_rooftop_map(poly: Polygon, gdf: GeoDataFrame) -> folium.Map:
         poly,
         style_function=lambda x: {
             "color": "blue",
-            "fillColor": "blue",
+            "fillColor": "None",
             "weight": 1,
-            "fillOpacity": 0.1,
+            "fillOpacity": 0.2,
         },
     ).add_to(m)
     return m

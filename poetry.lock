@@ -1991,6 +1991,31 @@ socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
 [[package]]
+name = "rpy2"
+version = "3.5.17"
+description = "Python interface to the R language (embedded R)"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "rpy2-3.5.17.tar.gz", hash = "sha256:dbff08c30f3d79161922623858a5b3b68a3fba8ee1747d6af41bc4ba68f3d582"},
+]
+
+[package.dependencies]
+cffi = ">=1.15.1"
+jinja2 = "*"
+packaging = {version = "*", markers = "platform_system == \"Windows\""}
+tzlocal = "*"
+
+[package.extras]
+all = ["ipython", "numpy (<1.26)", "numpy (>=1.26)", "pandas", "pandas (>=1.3.5)", "pytest"]
+doc = ["ipykernel", "jupytext", "multipledispatch", "nbconvert", "numpy", "pandas", "pygraphviz", "sphinx"]
+numpy = ["numpy (<1.26)", "numpy (>=1.26)"]
+pandas = ["numpy (<1.26)", "numpy (>=1.26)", "pandas", "pandas (>=1.3.5)"]
+test = ["ipython", "numpy (<1.26)", "numpy (>=1.26)", "pandas", "pandas (>=1.3.5)", "pytest"]
+test-minimal = ["coverage", "pytest (>=8)", "pytest-cov"]
+types = ["mypy", "types-tzlocal"]
+
+[[package]]
 name = "s2sphere"
 version = "0.2.5"
 description = "Python implementation of the S2 Geometry Library"
@@ -2285,6 +2310,23 @@ files = [
 ]
 
 [[package]]
+name = "tzlocal"
+version = "5.3"
+description = "tzinfo object for the local timezone"
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "tzlocal-5.3-py3-none-any.whl", hash = "sha256:3814135a1bb29763c6e4f08fd6e41dbb435c7a60bfbb03270211bcc537187d8c"},
+    {file = "tzlocal-5.3.tar.gz", hash = "sha256:2fafbfc07e9d8b49ade18f898d6bcd37ae88ce3ad6486842a2e4f03af68323d2"},
+]
+
+[package.dependencies]
+tzdata = {version = "*", markers = "platform_system == \"Windows\""}
+
+[package.extras]
+devenv = ["check-manifest", "pytest (>=4.3)", "pytest-cov", "pytest-mock (>=3.3)", "zest.releaser"]
+
+[[package]]
 name = "urllib3"
 version = "2.2.3"
 description = "HTTP library with thread-safe connection pooling, file post, and more."
@@ -2326,4 +2368,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "<3.13,>=3.11"
-content-hash = "daaefc0a76646cc5c98ed56e8f638ca9bb0330f9669b2da57bd95b31b346a8cb"
+content-hash = "d67dfeb6ad08e43519c0054df38fe2eb49a21c97efea54e8bfc2bfce50ea3784"

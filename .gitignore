@@ -1,6 +1,7 @@
 # Custom
 */output/
 */data/
+**/data
 cache/
 temp*
 

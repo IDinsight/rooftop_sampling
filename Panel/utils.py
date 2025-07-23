@@ -1,4 +1,5 @@
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -269,8 +270,9 @@ def get_nearest_point_on_road(point: Point, api_key: str) -> Point | None:
 
 def snap_point_to_road(args):
     """Helper function to snap a point to the nearest road."""
-    idx, point, api_key = args
+    idx, point, api_key, delay = args
     try:
+        time.sleep(delay)
         snapped_point = get_nearest_point_on_road(point, api_key)
         return idx, snapped_point
     except Exception as e:
@@ -278,7 +280,9 @@ def snap_point_to_road(args):
         return idx, None
 
 
-def snap_points_to_roads_parallel(gdf, api_key, max_workers=10) -> gpd.GeoSeries:
+def snap_points_to_roads_parallel(
+    gdf, api_key, max_workers=10, rate_limit_per_sec=60
+) -> gpd.GeoSeries:
     """
     Snap all points in a GeoDataFrame to the nearest road using parallel processing.
 
@@ -286,19 +290,19 @@ def snap_points_to_roads_parallel(gdf, api_key, max_workers=10) -> gpd.GeoSeries
         gdf: GeoDataFrame containing point geometries
         api_key: Google Roads API key
         max_workers: Number of parallel workers
+        rate_limit_per_sec: Maximum number of requests per second
 
     Returns:
         GeoSeries with snapped geometries
     """
-    # Prepare arguments for parallel processing
-    args_list = [(idx, point, api_key) for idx, point in enumerate(gdf.geometry)]
+    delay = 1.0 / rate_limit_per_sec
+    args_list = [
+        (idx, point, api_key, idx * delay) for idx, point in enumerate(gdf.geometry)
+    ]
 
-    # Initialize results dictionary
     snapped_points = {}
 
-    # Process in parallel with progress bar
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks and track with tqdm
         results = list(
             tqdm(
                 executor.map(snap_point_to_road, args_list),
@@ -307,7 +311,6 @@ def snap_points_to_roads_parallel(gdf, api_key, max_workers=10) -> gpd.GeoSeries
             )
         )
 
-    # Process results
     for idx, snapped_point in results:
         snapped_points[idx] = snapped_point
     snapped_points_series = gpd.GeoSeries(snapped_points)

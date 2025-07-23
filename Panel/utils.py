@@ -1,17 +1,18 @@
 import math
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import boto3
 import geopandas as gpd
 import matplotlib.cm
 import matplotlib.pyplot as plt
-
-# for plotting and coloring
 import numpy as np
+import requests
 import s2sphere
 from gridsample.utils import create_ids
 from matplotlib.colors import ListedColormap
 from s2cell.s2cell import lat_lon_to_cell_id
+from shapely import Point
 from shapely.geometry import Polygon
 from tqdm.notebook import tqdm
 
@@ -242,3 +243,73 @@ def get_matched_rooftop_centroids_from_s2_file(
     )
 
     return matched_rooftop_centroids_gdf
+
+
+def get_nearest_point_on_road(point: Point, api_key: str) -> Point | None:
+    """
+    Retrieves the nearest point on the road for a given point using the Google Roads API.
+
+    Args:
+        point (Point): The point for which to find the nearest point on the road.
+        api_key (str): Your Google Roads API key.
+
+    Returns:
+        Point: The nearest point on the road, or None if no point is found.
+
+    """
+    url = f"https://roads.googleapis.com/v1/snapToRoads?path={point.y},{point.x}&key={api_key}"
+    response = requests.get(url)
+    snapped_point = response.json().get("snappedPoints", [{}])[0].get("location")
+    return (
+        Point(snapped_point["longitude"], snapped_point["latitude"])
+        if snapped_point
+        else None
+    )
+
+
+def snap_point_to_road(args):
+    """Helper function to snap a point to the nearest road."""
+    idx, point, api_key = args
+    try:
+        snapped_point = get_nearest_point_on_road(point, api_key)
+        return idx, snapped_point
+    except Exception as e:
+        print(f"Error snapping point at index {idx}: {str(e)}")
+        return idx, None
+
+
+def snap_points_to_roads_parallel(gdf, api_key, max_workers=10) -> gpd.GeoSeries:
+    """
+    Snap all points in a GeoDataFrame to the nearest road using parallel processing.
+
+    Args:
+        gdf: GeoDataFrame containing point geometries
+        api_key: Google Roads API key
+        max_workers: Number of parallel workers
+
+    Returns:
+        GeoSeries with snapped geometries
+    """
+    # Prepare arguments for parallel processing
+    args_list = [(idx, point, api_key) for idx, point in enumerate(gdf.geometry)]
+
+    # Initialize results dictionary
+    snapped_points = {}
+
+    # Process in parallel with progress bar
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks and track with tqdm
+        results = list(
+            tqdm(
+                executor.map(snap_point_to_road, args_list),
+                total=len(args_list),
+                desc="Snapping points to roads",
+            )
+        )
+
+    # Process results
+    for idx, snapped_point in results:
+        snapped_points[idx] = snapped_point
+    snapped_points_series = gpd.GeoSeries(snapped_points)
+
+    return snapped_points_series

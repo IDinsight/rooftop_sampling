@@ -2,6 +2,7 @@
 */output/
 */data/
 **/data
+**/data_panel
 cache/
 temp*
 **/secrets

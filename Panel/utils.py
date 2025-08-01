@@ -1,5 +1,4 @@
 import math
-import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -246,7 +245,104 @@ def get_matched_rooftop_centroids_from_s2_file(
     return matched_rooftop_centroids_gdf
 
 
-def get_nearest_point_on_road(point: Point, api_key: str) -> Point | None:
+
+def get_nearest_points_on_road_batch(points: list[Point], api_key: str) -> list[Point | None]:
+    """
+    Retrieves the nearest points on the road for a list of points using the Google Roads API.
+    Max 100 points per request.
+
+    Args:
+        points (list[Point]): The points for which to find the nearest point on the road.
+        api_key (str): Your Google Roads API key.
+
+    Returns:
+        list[Point | None]: List of snapped points (None if not found).
+    """
+    # checks
+    if len(points) > 100:
+        raise ValueError("Google Roads API supports a maximum of 100 points per request.")
+    for pt in points:
+        if not isinstance(pt, Point):
+            raise ValueError("All points must be of type shapely.geometry.Point")
+
+    # Format: points=lat1,lng1|lat2,lng2|...
+    points_param = "|".join(f"{pt.y},{pt.x}" for pt in points)
+    url = (
+        f"https://roads.googleapis.com/v1/nearestRoads?points={points_param}&key={api_key}"
+    )
+    response = requests.get(url)
+    snapped_points = response.json().get("snappedPoints", [])
+
+    # Map originalIndex to snapped Point
+    snapped_dict = {}
+    for entry in snapped_points:
+        idx = entry.get("originalIndex")
+        if idx is not None and idx not in snapped_dict:  # Avoid overwriting if index already exists
+            loc = entry["location"]
+            snapped_dict[idx] = Point(loc["longitude"], loc["latitude"])
+
+    # Build result in original order, None for points not found
+    return [snapped_dict.get(i, None) for i in range(len(points))]
+
+
+def _get_nearest_points_on_road_batch_helper(args):
+    """Helper function to snap a batch of points to the nearest road."""
+    idx_list, points, api_key = args
+    try:
+        snapped_points = get_nearest_points_on_road_batch(points, api_key)
+        return list(zip(idx_list, snapped_points))
+    except Exception as e:
+        print(f"Error snapping points at indices {idx_list}: {str(e)}")
+        return [(idx, None) for idx in idx_list]
+
+
+def get_nearest_points_on_road_batch_parallel(
+    gdf, api_key, max_workers=10
+) -> gpd.GeoSeries:
+    """
+    Snap all points in a GeoDataFrame to the nearest road using parallel processing and batching.
+
+    Args:
+        gdf: GeoDataFrame containing point geometries
+        api_key: Google Roads API key
+        max_workers: Number of parallel workers
+
+    Returns:
+        GeoSeries with snapped geometries (order matches input).
+    """
+    points = list(gdf.geometry)
+    batch_size = 100 # Google Roads API supports a maximum of 100 points per request
+    args_list = []
+    for i in range(0, len(points), batch_size):
+        idx_list = list(range(i, min(i + batch_size, len(points))))
+        batch_points = points[i : i + batch_size]
+        args_list.append((idx_list, batch_points, api_key))
+
+    snapped_points = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(
+            tqdm(
+                executor.map(_get_nearest_points_on_road_batch_helper, args_list),
+                total=len(args_list),
+                desc="Snapping points to roads (batched)",
+            )
+        )
+
+    # Flatten results and fill snapped_points dict
+    for batch in results:
+        for idx, snapped_point in batch:
+            snapped_points[idx] = snapped_point
+
+    # Ensure output order matches input
+    snapped_points_series = gpd.GeoSeries([snapped_points.get(i, None) for i in range(len(points))], index=gdf.index)
+
+    return snapped_points_series
+
+
+
+### OLD functions for reference, not used in the current implementation ###
+def get_nearest_point_on_road_old(point: Point, api_key: str) -> Point | None:
     """
     Retrieves the nearest point on the road for a given point using the Google Roads API.
 
@@ -258,7 +354,7 @@ def get_nearest_point_on_road(point: Point, api_key: str) -> Point | None:
         Point: The nearest point on the road, or None if no point is found.
 
     """
-    url = f"https://roads.googleapis.com/v1/snapToRoads?path={point.y},{point.x}&key={api_key}"
+    url = f"https://roads.googleapis.com/v1/nearestRoads?points={point.y},{point.x}&key={api_key}"
     response = requests.get(url)
     snapped_point = response.json().get("snappedPoints", [{}])[0].get("location")
     return (
@@ -268,20 +364,19 @@ def get_nearest_point_on_road(point: Point, api_key: str) -> Point | None:
     )
 
 
-def snap_point_to_road(args):
+def snap_point_to_road_old(args):
     """Helper function to snap a point to the nearest road."""
-    idx, point, api_key, delay = args
+    idx, point, api_key = args
     try:
-        time.sleep(delay)
-        snapped_point = get_nearest_point_on_road(point, api_key)
+        snapped_point = get_nearest_point_on_road_old(point, api_key)
         return idx, snapped_point
     except Exception as e:
         print(f"Error snapping point at index {idx}: {str(e)}")
         return idx, None
 
 
-def snap_points_to_roads_parallel(
-    gdf, api_key, max_workers=10, rate_limit_per_sec=60
+def snap_points_to_roads_parallel_old(
+    gdf, api_key, max_workers=10
 ) -> gpd.GeoSeries:
     """
     Snap all points in a GeoDataFrame to the nearest road using parallel processing.
@@ -290,14 +385,12 @@ def snap_points_to_roads_parallel(
         gdf: GeoDataFrame containing point geometries
         api_key: Google Roads API key
         max_workers: Number of parallel workers
-        rate_limit_per_sec: Maximum number of requests per second
 
     Returns:
         GeoSeries with snapped geometries
     """
-    delay = 1.0 / rate_limit_per_sec
     args_list = [
-        (idx, point, api_key, idx * delay) for idx, point in enumerate(gdf.geometry)
+        (idx, point, api_key) for idx, point in enumerate(gdf.geometry)
     ]
 
     snapped_points = {}

@@ -398,7 +398,7 @@ def snap_points_to_roads_parallel_old(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(
             tqdm(
-                executor.map(snap_point_to_road, args_list),
+                executor.map(snap_point_to_road_old, args_list),
                 total=len(args_list),
                 desc="Snapping points to roads",
             )

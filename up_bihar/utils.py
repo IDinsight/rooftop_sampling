@@ -207,17 +207,18 @@ def download_VIDA_rooftops_data_by_s2(
 
 
 def get_matched_rooftop_centroids_from_s2_file(
-    s2_file_dir: Path, s2_cell_id: int, boundaries_gdf: gpd.GeoDataFrame
+    s2_file_dir: Path, s2_cell_id: int, boundaries_gdf: gpd.GeoDataFrame, add_id: bool = False
 ) -> gpd.GeoDataFrame:
     """
     Get rooftops from the S2 cell file that match the boundaries:
     1. loads the rooftops data for the specified S2 cell ID
     2. filters the rooftops to only those that intersect with the boundaries
-    3. returns a GeoDataFrame of the matched rooftops centroids with unique IDs
+    3. returns a GeoDataFrame of the matched rooftops centroids with unique IDs (optional)
 
     Parameters:
     - s2_cell_id (int): The S2 cell ID to filter rooftops for.
     - boundaries_gdf (gpd.GeoDataFrame): The GeoDataFrame containing the boundaries.
+    - add_id (bool): Whether to add unique IDs to the matched rooftops.
     """
 
     # load the rooftops data for the S2 cell
@@ -244,9 +245,10 @@ def get_matched_rooftop_centroids_from_s2_file(
     ).drop(columns=["index_right"])
 
     # add IDs to each rooftop
-    matched_rooftop_centroids_gdf["s2_rooftop_id"] = create_ids(
-        len(matched_rooftop_centroids_gdf), f"S2_{s2_cell_id}_ROOFTOP_"
-    )
+    if add_id:
+        matched_rooftop_centroids_gdf["s2_rooftop_id"] = create_ids(
+            len(matched_rooftop_centroids_gdf), f"S2_{s2_cell_id}_ROOFTOP_"
+        )
 
     return matched_rooftop_centroids_gdf
 

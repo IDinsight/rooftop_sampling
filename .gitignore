@@ -3,6 +3,7 @@
 */data/
 **/data
 **/data_panel
+**/data_ifa
 cache/
 temp*
 **/secrets

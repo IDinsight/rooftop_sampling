@@ -288,8 +288,8 @@ def find_k_nearest_rooftops(
         DataFrame with columns:
         - sampled_idx: Index of sampled rooftop
         - neighbour_idx: Index of neighbor rooftop  
-        - distance_m: Distance in meters
-        - rank: Neighbor rank (1=closest, 2=2nd closest, etc.)
+        - Distance from Original (m): Distance in meters
+        - Neighbour Rank: Neighbor rank (1=closest, 2=2nd closest, etc.)
         
     Notes
     -----
@@ -374,12 +374,12 @@ def find_k_nearest_rooftops(
             results_list.append({
                 "sampled_idx": sampled_idx,
                 "neighbour_idx": all_rooftops_gdf.index[idx],
-                "distance_m": dist,
-                "rank": rank
+                "Distance from Original (m)": round(dist, 2),
+                "Neighbour Rank": rank
             })
     
     results_df = pd.DataFrame(results_list)
-    print(f"Found {len(results_df):,} neighbor relationships")
+    print(f"Found {len(results_df):,} neighbour relationships")
     
     return results_df
 

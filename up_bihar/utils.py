@@ -138,7 +138,7 @@ def get_s2_cell_ids(gdf, level=6) -> list[int]:
     plt.show()
 
     step = 2
-    while len(leftover_shapes) > 1:
+    while len(leftover_shapes) > 0:
         # get new s2 cell IDs from the leftover shapes
         points_new = leftover_shapes.geometry.centroid.to_frame(name="geometry")
         s2_cell_ids_new = get_s2_cell_ids_from_points(points_new, level=level)
@@ -150,6 +150,10 @@ def get_s2_cell_ids(gdf, level=6) -> list[int]:
 
         # add new s2 cell IDs to the existing list
         s2_cell_ids = s2_cell_ids + s2_cell_ids_new
+
+        if len(leftover_shapes) == 0:
+            print("All shapes fully covered.")
+            break
 
         print(f"Shapes with spillover after round {step}: {len(leftover_shapes)}")
         leftover_shapes.plot()

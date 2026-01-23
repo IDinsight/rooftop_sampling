@@ -138,7 +138,7 @@ def get_s2_cell_ids(gdf, level=6) -> list[int]:
     plt.show()
 
     step = 2
-    while len(leftover_shapes) > 0:
+    while len(leftover_shapes) > 1:
         # get new s2 cell IDs from the leftover shapes
         points_new = leftover_shapes.geometry.centroid.to_frame(name="geometry")
         s2_cell_ids_new = get_s2_cell_ids_from_points(points_new, level=level)

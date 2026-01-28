@@ -132,10 +132,14 @@ def get_s2_cell_ids(gdf, level=6) -> list[int]:
     leftover_shapes = gdf.difference(s2_cell_shapes.unary_union)
     leftover_shapes = leftover_shapes[~leftover_shapes.is_empty]
 
-    print(f"Shapes with spillover after round 1: {len(leftover_shapes)}")
-    leftover_shapes.plot()
-    plt.title("Leftover Shapes After Round 1")
-    plt.show()
+    if len(leftover_shapes) == 0:
+        print("All shapes fully covered in round 1.")
+        return s2_cell_ids
+    else:
+        print(f"Shapes with spillover after round 1: {len(leftover_shapes)}")
+        leftover_shapes.plot()
+        plt.title("Leftover Shapes After Round 1")
+        plt.show()
 
     step = 2
     while len(leftover_shapes) > 1:

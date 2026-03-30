@@ -1,8 +1,12 @@
 # Custom
 */output/
 */data/
+**/data
+**/data_panel
+**/data_ifa
 cache/
 temp*
+**/secrets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

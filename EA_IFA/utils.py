@@ -10,12 +10,118 @@ import numpy as np
 import pandas as pd
 import requests
 import s2sphere
-from gridsample.utils import create_ids
 from s2cell.s2cell import lat_lon_to_cell_id
 from scipy.spatial import cKDTree
 from shapely import Point
 from shapely.geometry import Polygon
 from tqdm.notebook import tqdm
+
+
+def create_ids(df_length: int, prefix: str = "GRID_") -> list:
+    """
+    Create a list of string IDs in the format "{prefix}001".
+
+    Parameters
+    ----------
+    df : dataframe containing grids
+
+    Returns
+    -------
+    list : list of string_id_list.
+    """
+
+    # make list of ids [1, 2, 3, ...]
+    ids = np.arange(1, df_length + 1)
+
+    # make list of ids with leading zeros ["001", "002", "003", ...]
+    max_digits = len(str(df_length))
+    string_id_list = [prefix + str(id).zfill(max_digits) for id in ids]
+
+    return string_id_list
+
+
+def create_gmap_links(
+    df: pd.DataFrame, lat_name: str = "latitude", lon_name: str = "longitude"
+) -> pd.Series:
+    """
+    Create pd.Series of Google Maps URL.
+
+    Parameters
+    ------------
+    dataframe : A dataframe containing GPS coordinates for which to generate GMap links.
+    lat_name : Name of the column containing latitude values.
+    lon_name : Name of the column containing longitude values.
+
+    Returns
+    --------
+    A pd.Series with gmap links.
+    """
+
+    # Create 'gmap_url' column using string manipulation
+    gmap_url = (
+        "https://www.google.com/maps/search/?api=1&query="
+        + df[lat_name].astype(str)
+        + ","
+        + df[lon_name].astype(str)
+    )
+
+    # Replace 'gmap_url' where 'lat_name' or 'lon_name' are 'NaN' with 'None'
+    gmap_url.loc[(df[lat_name].isna()) | (df[lon_name].isna())] = np.nan
+
+    return gmap_url
+
+
+def save_shapefiles(
+    gdf: gpd.GeoDataFrame,
+    folderpath: Path,
+    filename: str = "processed_grids",
+    formats: list[str] = ["parquet", "kml", "geojson", "shp", "csv"],
+) -> None:
+    """
+    Save a GeoDataFrame to multiple file formats.
+
+    Parameters
+    ----------
+    gdf : A GeoDataFrame.
+    folderpath : The directory in which to save the files.
+    filename : The name of the file to save, without extensions.
+    formats : A list of file formats to save the GeoDataFrame to. Must be a subset of
+        ["parquet", "kml", "geojson", "shp", "csv"].
+
+    Returns
+    -------
+    None
+    """
+
+    # raise error if disallowed formats are passed
+    allowed_formats = ["parquet", "kml", "geojson", "shp", "csv"]
+    for format in formats:
+        if format not in allowed_formats:
+            raise ValueError(
+                f"{format} not allowed. formats must be a list containing any of the "
+                f"following: {allowed_formats}"
+            )
+
+    # create output folder if it doesn't exist
+    folderpath.mkdir(parents=True, exist_ok=True)
+
+    # with geometries
+    if "parquet" in formats:
+        gdf.to_parquet(folderpath / f"{filename}.parquet")
+
+    if "kml" in formats:
+        gdf.to_file(folderpath / f"{filename}.kml", driver="KML")
+
+    if "geojson" in formats:
+        gdf.to_file(folderpath / f"{filename}.geojson", driver="GeoJSON")
+
+    if "shp" in formats:
+        # save as shapefile
+        gdf.to_file(folderpath / f"{filename}.shp", driver="ESRI Shapefile")
+
+    # without geometries
+    if "csv" in formats:
+        gdf.drop(columns=["geometry"]).to_csv(folderpath / f"{filename}.csv")
 
 
 def generate_colormap(N):
@@ -216,7 +322,10 @@ def download_VIDA_rooftops_data_by_s2(
 
 
 def get_matched_rooftop_centroids_from_s2_file(
-    s2_file_dir: Path, s2_cell_id: int, boundaries_gdf: gpd.GeoDataFrame, add_id: bool = False
+    s2_file_dir: Path,
+    s2_cell_id: int,
+    boundaries_gdf: gpd.GeoDataFrame,
+    add_id: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Get rooftops from the S2 cell file that match the boundaries:
@@ -271,10 +380,10 @@ def find_k_nearest_rooftops(
 ) -> pd.DataFrame:
     """
     Find k nearest rooftops for each sampled rooftop using scipy.spatial.cKDTree.
-    
+
     This is an efficient implementation that builds a KD-tree spatial index for fast
     nearest neighbor queries. Optimized for large datasets (e.g., 48M rooftops).
-    
+
     Parameters
     ----------
     all_rooftops_gdf : gpd.GeoDataFrame
@@ -289,16 +398,16 @@ def find_k_nearest_rooftops(
     utm_zone : str, default="auto"
         UTM zone to use for projection. Use 'auto' to automatically detect
         based on longitude, or specify an EPSG code (e.g., 'EPSG:32644').
-        
+
     Returns
     -------
     pd.DataFrame
         DataFrame with columns:
         - sampled_idx: Index of sampled rooftop
-        - neighbour_idx: Index of neighbor rooftop  
+        - neighbour_idx: Index of neighbor rooftop
         - Distance from Original (m): Distance in meters
         - Neighbour Rank: Neighbor rank (1=closest, 2=2nd closest, etc.)
-        
+
     Notes
     -----
     - Both GeoDataFrames should have the same CRS (typically EPSG:4326)
@@ -307,7 +416,7 @@ def find_k_nearest_rooftops(
     - Query time: ~1-2 seconds for 4500 queries with k=20
     - Memory usage: ~3-4 GB for 48M points
     - Uses all CPU cores via workers=-1 parameter
-    
+
     Examples
     --------
     >>> # Find 20 nearest neighbors
@@ -316,7 +425,7 @@ def find_k_nearest_rooftops(
     ...     sampled_rooftops_gdf=sampled,
     ...     k=20
     ... )
-    
+
     >>> # Find neighbors within 1km radius only
     >>> neighbors_df = find_k_nearest_rooftops(
     ...     all_rooftops_gdf=all_rooftops,
@@ -324,7 +433,7 @@ def find_k_nearest_rooftops(
     ...     k=20,
     ...     max_distance_m=1000
     ... )
-    
+
     >>> # Join back to get rooftop details
     >>> neighbors_with_details = neighbors_df.merge(
     ...     all_rooftops,
@@ -333,7 +442,7 @@ def find_k_nearest_rooftops(
     ...     how='left'
     ... )
     """
-    
+
     # Auto-detect UTM zone if needed
     if utm_zone == "auto":
         center_lon = all_rooftops_gdf.geometry.x.mean()
@@ -341,59 +450,62 @@ def find_k_nearest_rooftops(
             utm_zone = "EPSG:32644"  # UTM Zone 44N (for western UP/Bihar)
         else:
             utm_zone = "EPSG:32645"  # UTM Zone 45N (for eastern UP/Bihar)
-    
+
     print(f"Using CRS: {utm_zone}")
-    
+
     # Project to UTM for accurate metric distances
     print("Projecting coordinates to UTM...")
     all_proj = all_rooftops_gdf.to_crs(utm_zone)
     sampled_proj = sampled_rooftops_gdf.to_crs(utm_zone)
-    
+
     # Extract coordinates as numpy arrays
     all_coords = np.column_stack([all_proj.geometry.x, all_proj.geometry.y])
     sampled_coords = np.column_stack([sampled_proj.geometry.x, sampled_proj.geometry.y])
-    
+
     # Build KD-tree
     print(f"Building KD-tree for {len(all_coords):,} points...")
     tree = cKDTree(all_coords)
-    
+
     # Query for k+1 neighbors (includes self-match)
     print(f"Querying {len(sampled_coords):,} points for k={k} neighbors...")
     distances, indices = tree.query(
-        sampled_coords, 
+        sampled_coords,
         k=k + 1,  # +1 to include self-match
-        workers=-1  # Use all CPU cores for parallel processing
+        workers=-1,  # Use all CPU cores for parallel processing
     )
-    
+
     # Build results DataFrame
     results_list = []
     for i, (dists, idxs) in enumerate(zip(distances, indices)):
         sampled_idx = sampled_rooftops_gdf.index[i]
-        
+
         # Filter out self-match (distance ~0) and apply distance threshold
         mask = dists > 1e-6  # Remove self (numerical precision threshold)
         if max_distance_m is not None:
-            mask &= (dists <= max_distance_m)
-        
+            mask &= dists <= max_distance_m
+
         valid_dists = dists[mask][:k]
         valid_idxs = idxs[mask][:k]
-        
+
         for rank, (dist, idx) in enumerate(zip(valid_dists, valid_idxs), start=1):
-            results_list.append({
-                "sampled_idx": sampled_idx,
-                "neighbour_idx": all_rooftops_gdf.index[idx],
-                "Distance from Original (m)": round(dist, 2),
-                "Neighbour Rank": rank
-            })
-    
+            results_list.append(
+                {
+                    "sampled_idx": sampled_idx,
+                    "neighbour_idx": all_rooftops_gdf.index[idx],
+                    "Distance from Original (m)": round(dist, 2),
+                    "Neighbour Rank": rank,
+                }
+            )
+
     results_df = pd.DataFrame(results_list)
     print(f"Found {len(results_df):,} neighbour relationships")
-    
+
     return results_df
 
 
-
-def get_nearest_points_on_road_batch(points: list[Point], api_key: str) -> list[Point | None]:
+def get_nearest_points_on_road_batch(
+    points: list[Point], api_key: str
+) -> list[Point | None]:
     """
     Retrieves the nearest points on the road for a list of points using the Google Roads API.
     Max 100 points per request.
@@ -407,16 +519,16 @@ def get_nearest_points_on_road_batch(points: list[Point], api_key: str) -> list[
     """
     # checks
     if len(points) > 100:
-        raise ValueError("Google Roads API supports a maximum of 100 points per request.")
+        raise ValueError(
+            "Google Roads API supports a maximum of 100 points per request."
+        )
     for pt in points:
         if not isinstance(pt, Point):
             raise ValueError("All points must be of type shapely.geometry.Point")
 
     # Format: points=lat1,lng1|lat2,lng2|...
     points_param = "|".join(f"{pt.y},{pt.x}" for pt in points)
-    url = (
-        f"https://roads.googleapis.com/v1/nearestRoads?points={points_param}&key={api_key}"
-    )
+    url = f"https://roads.googleapis.com/v1/nearestRoads?points={points_param}&key={api_key}"
     response = requests.get(url)
     snapped_points = response.json().get("snappedPoints", [])
 
@@ -424,7 +536,9 @@ def get_nearest_points_on_road_batch(points: list[Point], api_key: str) -> list[
     snapped_dict = {}
     for entry in snapped_points:
         idx = entry.get("originalIndex")
-        if idx is not None and idx not in snapped_dict:  # Avoid overwriting if index already exists
+        if (
+            idx is not None and idx not in snapped_dict
+        ):  # Avoid overwriting if index already exists
             loc = entry["location"]
             snapped_dict[idx] = Point(loc["longitude"], loc["latitude"])
 
@@ -458,7 +572,7 @@ def get_nearest_points_on_road_batch_parallel(
         GeoSeries with snapped geometries (order matches input).
     """
     points = list(gdf.geometry)
-    batch_size = 100 # Google Roads API supports a maximum of 100 points per request
+    batch_size = 100  # Google Roads API supports a maximum of 100 points per request
     args_list = []
     for i in range(0, len(points), batch_size):
         idx_list = list(range(i, min(i + batch_size, len(points))))
@@ -482,10 +596,11 @@ def get_nearest_points_on_road_batch_parallel(
             snapped_points[idx] = snapped_point
 
     # Ensure output order matches input
-    snapped_points_series = gpd.GeoSeries([snapped_points.get(i, None) for i in range(len(points))], index=gdf.index)
+    snapped_points_series = gpd.GeoSeries(
+        [snapped_points.get(i, None) for i in range(len(points))], index=gdf.index
+    )
 
     return snapped_points_series
-
 
 
 ### OLD functions for reference, not used in the current implementation ###
@@ -522,9 +637,7 @@ def snap_point_to_road_old(args):
         return idx, None
 
 
-def snap_points_to_roads_parallel_old(
-    gdf, api_key, max_workers=10
-) -> gpd.GeoSeries:
+def snap_points_to_roads_parallel_old(gdf, api_key, max_workers=10) -> gpd.GeoSeries:
     """
     Snap all points in a GeoDataFrame to the nearest road using parallel processing.
 
@@ -536,9 +649,7 @@ def snap_points_to_roads_parallel_old(
     Returns:
         GeoSeries with snapped geometries
     """
-    args_list = [
-        (idx, point, api_key) for idx, point in enumerate(gdf.geometry)
-    ]
+    args_list = [(idx, point, api_key) for idx, point in enumerate(gdf.geometry)]
 
     snapped_points = {}
 

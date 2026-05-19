@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import boto3
+from botocore import UNSIGNED
+from botocore.client import Config
 import geopandas as gpd
 import matplotlib.cm
 import matplotlib.pyplot as plt
@@ -289,7 +291,11 @@ def download_VIDA_rooftops_data_by_s2_single(
     else:
         print(f"Downloading file for S2 cell ID: {s2_cell_id}")
         s2_rooftops_path.parent.mkdir(parents=True, exist_ok=True)
-        s3 = boto3.client("s3", endpoint_url="https://data.source.coop")
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="https://data.source.coop",
+            config=Config(signature_version=UNSIGNED),
+        )
         try:
             s3.download_file(
                 "vida",

@@ -673,3 +673,24 @@ def snap_points_to_roads_parallel_old(gdf, api_key, max_workers=10) -> gpd.GeoSe
     snapped_points_series = gpd.GeoSeries(snapped_points)
 
     return snapped_points_series
+
+def save_partitioned_kmls(gdf, FOLDER_PATH, filename_prefix):
+    """
+    Save the sampled rooftops GeoDataFrame into multiple KML files,
+    each containing a maximum of 1500 rows.
+    """
+    MAX_ROWS_PER_FILE = 1500
+    n_partitions = (len(gdf) + MAX_ROWS_PER_FILE - 1) // MAX_ROWS_PER_FILE
+
+    for partition_idx in range(n_partitions):
+        start_idx = partition_idx * MAX_ROWS_PER_FILE
+        end_idx = min((partition_idx + 1) * MAX_ROWS_PER_FILE, len(gdf))
+
+        partition_gdf = gdf.iloc[start_idx:end_idx]
+
+        save_shapefiles(
+            partition_gdf,
+            FOLDER_PATH,
+            f"{filename_prefix}_part_{partition_idx + 1}",
+            ["kml"],
+        )

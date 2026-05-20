@@ -1,0 +1,11 @@
+boto3
+geopandas
+matplotlib
+numpy
+pandas
+requests
+s2sphere
+s2cell
+scipy
+shapely
+tqdm

@@ -1,0 +1,675 @@
+import math
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import boto3
+from botocore import UNSIGNED
+from botocore.client import Config
+import geopandas as gpd
+import matplotlib.cm
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import requests
+import s2sphere
+from s2cell.s2cell import lat_lon_to_cell_id
+from scipy.spatial import cKDTree
+from shapely import Point
+from shapely.geometry import Polygon
+from tqdm.notebook import tqdm
+
+
+def create_ids(df_length: int, prefix: str = "GRID_") -> list:
+    """
+    Create a list of string IDs in the format "{prefix}001".
+
+    Parameters
+    ----------
+    df : dataframe containing grids
+
+    Returns
+    -------
+    list : list of string_id_list.
+    """
+
+    # make list of ids [1, 2, 3, ...]
+    ids = np.arange(1, df_length + 1)
+
+    # make list of ids with leading zeros ["001", "002", "003", ...]
+    max_digits = len(str(df_length))
+    string_id_list = [prefix + str(id).zfill(max_digits) for id in ids]
+
+    return string_id_list
+
+
+def create_gmap_links(
+    df: pd.DataFrame, lat_name: str = "latitude", lon_name: str = "longitude"
+) -> pd.Series:
+    """
+    Create pd.Series of Google Maps URL.
+
+    Parameters
+    ------------
+    dataframe : A dataframe containing GPS coordinates for which to generate GMap links.
+    lat_name : Name of the column containing latitude values.
+    lon_name : Name of the column containing longitude values.
+
+    Returns
+    --------
+    A pd.Series with gmap links.
+    """
+
+    # Create 'gmap_url' column using string manipulation
+    gmap_url = (
+        "https://www.google.com/maps/search/?api=1&query="
+        + df[lat_name].astype(str)
+        + ","
+        + df[lon_name].astype(str)
+    )
+
+    # Replace 'gmap_url' where 'lat_name' or 'lon_name' are 'NaN' with 'None'
+    gmap_url.loc[(df[lat_name].isna()) | (df[lon_name].isna())] = np.nan
+
+    return gmap_url
+
+
+def save_shapefiles(
+    gdf: gpd.GeoDataFrame,
+    folderpath: Path,
+    filename: str = "processed_grids",
+    formats: list[str] = ["parquet", "kml", "geojson", "shp", "csv"],
+) -> None:
+    """
+    Save a GeoDataFrame to multiple file formats.
+
+    Parameters
+    ----------
+    gdf : A GeoDataFrame.
+    folderpath : The directory in which to save the files.
+    filename : The name of the file to save, without extensions.
+    formats : A list of file formats to save the GeoDataFrame to. Must be a subset of
+        ["parquet", "kml", "geojson", "shp", "csv"].
+
+    Returns
+    -------
+    None
+    """
+
+    # raise error if disallowed formats are passed
+    allowed_formats = ["parquet", "kml", "geojson", "shp", "csv"]
+    for format in formats:
+        if format not in allowed_formats:
+            raise ValueError(
+                f"{format} not allowed. formats must be a list containing any of the "
+                f"following: {allowed_formats}"
+            )
+
+    # create output folder if it doesn't exist
+    folderpath.mkdir(parents=True, exist_ok=True)
+
+    # with geometries
+    if "parquet" in formats:
+        gdf.to_parquet(folderpath / f"{filename}.parquet")
+
+    if "kml" in formats:
+        gdf.to_file(folderpath / f"{filename}.kml", driver="KML")
+
+    if "geojson" in formats:
+        gdf.to_file(folderpath / f"{filename}.geojson", driver="GeoJSON")
+
+    if "shp" in formats:
+        # save as shapefile
+        gdf.to_file(folderpath / f"{filename}.shp", driver="ESRI Shapefile")
+
+    # without geometries
+    if "csv" in formats:
+        gdf.drop(columns=["geometry"]).to_csv(folderpath / f"{filename}.csv")
+
+
+def generate_colormap(N):
+    arr = np.arange(N) / N
+    N_up = int(math.ceil(N / 7) * 7)
+    arr.resize(N_up)
+    arr = arr.reshape(7, N_up // 7).T.reshape(-1)
+    ret = matplotlib.cm.hsv(arr)
+    n = ret[:, 3].size
+    a = n // 2
+    b = n - a
+
+    # Create arrays of exactly matching sizes
+    for i in range(3):
+        ret[0:a, i] *= np.linspace(0.2, 1, a)
+    ret[a:, 3] *= np.linspace(1, 0.3, b)
+
+    return ret[:N]  # Return only the requested number of colors
+
+
+def s2_cell_id_to_shape(s2_cell_id):
+    """
+    Convert an S2 cell ID to a shapely polygon.
+
+    Parameters:
+    - s2_cell_id (int): The S2 cell ID
+
+    Returns:
+    - shapely.geometry.Polygon: Polygon representing the S2 cell
+    """
+    # Convert string to int if necessary
+    if isinstance(s2_cell_id, str):
+        s2_cell_id = int(s2_cell_id)
+
+    # Create an S2 cell from the ID
+    cell = s2sphere.CellId(s2_cell_id)
+    cell = s2sphere.Cell(cell)
+
+    # Extract the vertices of the cell
+    vertices = []
+    for i in range(4):
+        vertex = cell.get_vertex(i)
+        lat_lng = s2sphere.LatLng.from_point(vertex)
+        vertices.append((lat_lng.lng().degrees, lat_lng.lat().degrees))
+
+    # Close the polygon by repeating the first vertex
+    vertices.append(vertices[0])
+
+    # Create a shapely polygon
+    return Polygon(vertices)
+
+
+def s2_cell_ids_to_shapes_gdf(s2_cell_ids):
+    """
+    Convert a list of S2 cell IDs to a GeoDataFrame with polygon geometries.
+
+    Parameters:
+    - s2_cell_ids (list): List of S2 cell IDs
+
+    Returns:
+    - geopandas.GeoDataFrame: GeoDataFrame with S2 cells as polygons
+    """
+    geometries = []
+    for s2_id in s2_cell_ids:
+        polygon = s2_cell_id_to_shape(s2_id)
+        geometries.append(polygon)
+
+    return gpd.GeoDataFrame(
+        {"s2_cell_id": s2_cell_ids, "geometry": geometries}, crs="EPSG:4326"
+    )
+
+
+def get_s2_cell_ids_from_points(points, level=6) -> list[int]:
+    """
+    Get S2 cell IDs for the given points at the specified level.
+    """
+    # check if crs is set to WGS84 (EPSG:4326)
+    if points.crs is None or points.crs.to_string() != "EPSG:4326":
+        raise ValueError("Points GeoDataFrame must be in WGS84 (EPSG:4326) CRS.")
+
+    # convert points to S2 cell IDs
+    s2_cell_id_list = points.geometry.apply(
+        lambda geom: lat_lon_to_cell_id(geom.y, geom.x, level)
+    )
+    s2_cell_ids = s2_cell_id_list.unique().tolist()
+
+    return s2_cell_ids
+
+
+def get_s2_cell_ids(gdf, level=6) -> list[int]:
+    """
+    Get S2 cell IDs of S2 cells that overlap the given GeoDataFrame at the specified level.
+
+    Iteratively checks if any area is not covered by an S2 cell and continues until all areas are covered.
+
+    Parameters:
+    - gdf: GeoDataFrame in WGS84 (EPSG:4326) CRS
+    - level: int
+
+    Returns:
+    - list[int]: List of S2 cell IDs
+    """
+
+    # check if crs is set to WGS84 (EPSG:4326)
+    if gdf.crs is None or gdf.crs.to_string() != "EPSG:4326":
+        raise ValueError("GeoDataFrame must be in WGS84 (EPSG:4326) CRS.")
+
+    # generate initial S2 cell IDs from the GeoDataFrame centroids
+    points = gdf.geometry.centroid.to_frame(name="geometry")
+    s2_cell_ids = get_s2_cell_ids_from_points(points, level=level)
+
+    # get initial S2 cell shapes and check for full coverage
+    s2_cell_shapes = s2_cell_ids_to_shapes_gdf(s2_cell_ids)
+    leftover_shapes = gdf.difference(s2_cell_shapes.unary_union)
+    leftover_shapes = leftover_shapes[~leftover_shapes.is_empty]
+
+    if len(leftover_shapes) == 0:
+        print("All shapes fully covered in round 1.")
+        return s2_cell_ids
+    else:
+        print(f"Shapes with spillover after round 1: {len(leftover_shapes)}")
+        leftover_shapes.plot()
+        plt.title("Leftover Shapes After Round 1")
+        plt.show()
+
+    step = 2
+    while len(leftover_shapes) > 1:
+        # get new s2 cell IDs from the leftover shapes
+        points_new = leftover_shapes.geometry.centroid.to_frame(name="geometry")
+        s2_cell_ids_new = get_s2_cell_ids_from_points(points_new, level=level)
+
+        # get new s2 cell shapes
+        s2_cell_shapes = s2_cell_ids_to_shapes_gdf(s2_cell_ids_new)
+        leftover_shapes = leftover_shapes.difference(s2_cell_shapes.unary_union)
+        leftover_shapes = leftover_shapes[~leftover_shapes.is_empty]
+
+        # add new s2 cell IDs to the existing list
+        s2_cell_ids = s2_cell_ids + s2_cell_ids_new
+
+        if len(leftover_shapes) == 0:
+            print("All shapes fully covered.")
+            break
+
+        print(f"Shapes with spillover after round {step}: {len(leftover_shapes)}")
+        leftover_shapes.plot()
+        plt.title(f"Leftover Shapes After Round {step}")
+        plt.show()
+        step += 1
+
+    return s2_cell_ids
+
+
+def download_VIDA_rooftops_data_by_s2_single(
+    s2_cell_id: int, country_iso_code: str, target_data_dir: Path
+) -> None:
+    """
+    Download S2 rooftops data for a given S2 cell ID from the VIDA S3 bucket. URL:
+    https://beta.source.coop/vida/google-microsoft-open-buildings/geoparquet/by_country_s2/country_iso=IND/
+    """
+
+    s2_rooftops_path = target_data_dir / f"{s2_cell_id}.parquet"
+
+    if s2_rooftops_path.exists():
+        print(f"File {s2_cell_id} already exists.")
+    else:
+        print(f"Downloading file for S2 cell ID: {s2_cell_id}")
+        s2_rooftops_path.parent.mkdir(parents=True, exist_ok=True)
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="https://data.source.coop",
+            config=Config(signature_version=UNSIGNED),
+        )
+        try:
+            s3.download_file(
+                "vida",
+                f"google-microsoft-open-buildings/geoparquet/by_country_s2/country_iso={country_iso_code}/{s2_cell_id}.parquet",
+                str(s2_rooftops_path),
+            )
+            print(f"File {s2_cell_id} downloaded.")
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to download file for S2 cell ID {s2_cell_id}: {e}"
+            )
+
+
+def download_VIDA_rooftops_data_by_s2(
+    s2_cell_ids: list[int], country_iso_code: str, target_data_dir: Path
+) -> None:
+    """
+    Download S2 rooftops data for multiple S2 cell IDs
+
+    Parameters:
+    - s2_cell_ids: list of S2 cell IDs
+    - country_iso_code: ISO code of the country (e.g., "IND" for India)
+    - target_data_dir: directory to save the downloaded data
+    """
+
+    for s2_cell_id in tqdm(s2_cell_ids, desc="Downloading rooftops by S2 cell"):
+        download_VIDA_rooftops_data_by_s2_single(
+            s2_cell_id, country_iso_code, target_data_dir
+        )
+
+
+def get_matched_rooftop_centroids_from_s2_file(
+    s2_file_dir: Path,
+    s2_cell_id: int,
+    boundaries_gdf: gpd.GeoDataFrame,
+    add_id: bool = False,
+) -> gpd.GeoDataFrame:
+    """
+    Get rooftops from the S2 cell file that match the boundaries:
+    1. loads the rooftops data for the specified S2 cell ID
+    2. filters the rooftops to only those that intersect with the boundaries
+    3. returns a GeoDataFrame of the matched rooftops centroids with unique IDs (optional)
+
+    Parameters:
+    - s2_cell_id (int): The S2 cell ID to filter rooftops for.
+    - boundaries_gdf (gpd.GeoDataFrame): The GeoDataFrame containing the boundaries.
+    - add_id (bool): Whether to add unique IDs to the matched rooftops.
+    """
+
+    # load the rooftops data for the S2 cell
+    s2_rooftops_path = s2_file_dir / f"{s2_cell_id}.parquet"
+    s2_rooftops_gdf = gpd.read_parquet(s2_rooftops_path)
+
+    # replace polygons with just the centroid of the rooftops
+    s2_rooftop_centroids_gdf = s2_rooftops_gdf.set_geometry(
+        s2_rooftops_gdf.geometry.centroid
+    )
+
+    # filter the boundaries dataset to only the shapes that overlap the S2 cell
+    s2_cell_polygon = s2_cell_id_to_shape(s2_cell_id)
+    boundaries_gdf_s2_overlap = boundaries_gdf[
+        boundaries_gdf.intersects(s2_cell_polygon)
+    ]
+
+    # perform a spatial join to filter and add area metadata to the rooftops
+    matched_rooftop_centroids_gdf = gpd.sjoin(
+        s2_rooftop_centroids_gdf,
+        boundaries_gdf_s2_overlap,
+        how="inner",
+        predicate="within",
+    ).drop(columns=["index_right"])
+
+    # add IDs to each rooftop
+    if add_id:
+        matched_rooftop_centroids_gdf["s2_rooftop_id"] = create_ids(
+            len(matched_rooftop_centroids_gdf), f"S2_{s2_cell_id}_ROOFTOP_"
+        )
+
+    return matched_rooftop_centroids_gdf
+
+
+def find_k_nearest_rooftops(
+    all_rooftops_gdf: gpd.GeoDataFrame,
+    sampled_rooftops_gdf: gpd.GeoDataFrame,
+    k: int = 20,
+    max_distance_m: float | None = None,
+    utm_zone: str = "auto",
+) -> pd.DataFrame:
+    """
+    Find k nearest rooftops for each sampled rooftop using scipy.spatial.cKDTree.
+
+    This is an efficient implementation that builds a KD-tree spatial index for fast
+    nearest neighbor queries. Optimized for large datasets (e.g., 48M rooftops).
+
+    Parameters
+    ----------
+    all_rooftops_gdf : gpd.GeoDataFrame
+        All rooftops (e.g., 48M points) with Point geometries.
+    sampled_rooftops_gdf : gpd.GeoDataFrame
+        Sampled rooftops (e.g., 4500 points) with Point geometries.
+    k : int, default=20
+        Number of nearest neighbors to find for each sampled rooftop.
+    max_distance_m : float, optional
+        Maximum distance threshold in meters. Neighbors beyond this distance
+        will be excluded.
+    utm_zone : str, default="auto"
+        UTM zone to use for projection. Use 'auto' to automatically detect
+        based on longitude, or specify an EPSG code (e.g., 'EPSG:32644').
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns:
+        - sampled_idx: Index of sampled rooftop
+        - neighbour_idx: Index of neighbor rooftop
+        - Distance from Original (m): Distance in meters
+        - Neighbour Rank: Neighbor rank (1=closest, 2=2nd closest, etc.)
+
+    Notes
+    -----
+    - Both GeoDataFrames should have the same CRS (typically EPSG:4326)
+    - The function projects to UTM for accurate metric distances
+    - Build time: ~5-10 minutes for 48M points (one-time cost)
+    - Query time: ~1-2 seconds for 4500 queries with k=20
+    - Memory usage: ~3-4 GB for 48M points
+    - Uses all CPU cores via workers=-1 parameter
+
+    Examples
+    --------
+    >>> # Find 20 nearest neighbors
+    >>> neighbors_df = find_k_nearest_rooftops(
+    ...     all_rooftops_gdf=all_rooftops,
+    ...     sampled_rooftops_gdf=sampled,
+    ...     k=20
+    ... )
+
+    >>> # Find neighbors within 1km radius only
+    >>> neighbors_df = find_k_nearest_rooftops(
+    ...     all_rooftops_gdf=all_rooftops,
+    ...     sampled_rooftops_gdf=sampled,
+    ...     k=20,
+    ...     max_distance_m=1000
+    ... )
+
+    >>> # Join back to get rooftop details
+    >>> neighbors_with_details = neighbors_df.merge(
+    ...     all_rooftops,
+    ...     left_on='neighbour_idx',
+    ...     right_index=True,
+    ...     how='left'
+    ... )
+    """
+
+    # Auto-detect UTM zone if needed
+    if utm_zone == "auto":
+        center_lon = all_rooftops_gdf.geometry.x.mean()
+        if center_lon < 81:
+            utm_zone = "EPSG:32644"  # UTM Zone 44N (for western UP/Bihar)
+        else:
+            utm_zone = "EPSG:32645"  # UTM Zone 45N (for eastern UP/Bihar)
+
+    print(f"Using CRS: {utm_zone}")
+
+    # Project to UTM for accurate metric distances
+    print("Projecting coordinates to UTM...")
+    all_proj = all_rooftops_gdf.to_crs(utm_zone)
+    sampled_proj = sampled_rooftops_gdf.to_crs(utm_zone)
+
+    # Extract coordinates as numpy arrays
+    all_coords = np.column_stack([all_proj.geometry.x, all_proj.geometry.y])
+    sampled_coords = np.column_stack([sampled_proj.geometry.x, sampled_proj.geometry.y])
+
+    # Build KD-tree
+    print(f"Building KD-tree for {len(all_coords):,} points...")
+    tree = cKDTree(all_coords)
+
+    # Query for k+1 neighbors (includes self-match)
+    print(f"Querying {len(sampled_coords):,} points for k={k} neighbors...")
+    distances, indices = tree.query(
+        sampled_coords,
+        k=k + 1,  # +1 to include self-match
+        workers=-1,  # Use all CPU cores for parallel processing
+    )
+
+    # Build results DataFrame
+    results_list = []
+    for i, (dists, idxs) in enumerate(zip(distances, indices)):
+        sampled_idx = sampled_rooftops_gdf.index[i]
+
+        # Filter out self-match (distance ~0) and apply distance threshold
+        mask = dists > 1e-6  # Remove self (numerical precision threshold)
+        if max_distance_m is not None:
+            mask &= dists <= max_distance_m
+
+        valid_dists = dists[mask][:k]
+        valid_idxs = idxs[mask][:k]
+
+        for rank, (dist, idx) in enumerate(zip(valid_dists, valid_idxs), start=1):
+            results_list.append(
+                {
+                    "sampled_idx": sampled_idx,
+                    "neighbour_idx": all_rooftops_gdf.index[idx],
+                    "Distance from Original (m)": round(dist, 2),
+                    "Neighbour Rank": rank,
+                }
+            )
+
+    results_df = pd.DataFrame(results_list)
+    print(f"Found {len(results_df):,} neighbour relationships")
+
+    return results_df
+
+
+def get_nearest_points_on_road_batch(
+    points: list[Point], api_key: str
+) -> list[Point | None]:
+    """
+    Retrieves the nearest points on the road for a list of points using the Google Roads API.
+    Max 100 points per request.
+
+    Args:
+        points (list[Point]): The points for which to find the nearest point on the road.
+        api_key (str): Your Google Roads API key.
+
+    Returns:
+        list[Point | None]: List of snapped points (None if not found).
+    """
+    # checks
+    if len(points) > 100:
+        raise ValueError(
+            "Google Roads API supports a maximum of 100 points per request."
+        )
+    for pt in points:
+        if not isinstance(pt, Point):
+            raise ValueError("All points must be of type shapely.geometry.Point")
+
+    # Format: points=lat1,lng1|lat2,lng2|...
+    points_param = "|".join(f"{pt.y},{pt.x}" for pt in points)
+    url = f"https://roads.googleapis.com/v1/nearestRoads?points={points_param}&key={api_key}"
+    response = requests.get(url)
+    snapped_points = response.json().get("snappedPoints", [])
+
+    # Map originalIndex to snapped Point
+    snapped_dict = {}
+    for entry in snapped_points:
+        idx = entry.get("originalIndex")
+        if (
+            idx is not None and idx not in snapped_dict
+        ):  # Avoid overwriting if index already exists
+            loc = entry["location"]
+            snapped_dict[idx] = Point(loc["longitude"], loc["latitude"])
+
+    # Build result in original order, None for points not found
+    return [snapped_dict.get(i, None) for i in range(len(points))]
+
+
+def _get_nearest_points_on_road_batch_helper(args):
+    """Helper function to snap a batch of points to the nearest road."""
+    idx_list, points, api_key = args
+    try:
+        snapped_points = get_nearest_points_on_road_batch(points, api_key)
+        return list(zip(idx_list, snapped_points))
+    except Exception as e:
+        print(f"Error snapping points at indices {idx_list}: {str(e)}")
+        return [(idx, None) for idx in idx_list]
+
+
+def get_nearest_points_on_road_batch_parallel(
+    gdf, api_key, max_workers=10
+) -> gpd.GeoSeries:
+    """
+    Snap all points in a GeoDataFrame to the nearest road using parallel processing and batching.
+
+    Args:
+        gdf: GeoDataFrame containing point geometries
+        api_key: Google Roads API key
+        max_workers: Number of parallel workers
+
+    Returns:
+        GeoSeries with snapped geometries (order matches input).
+    """
+    points = list(gdf.geometry)
+    batch_size = 100  # Google Roads API supports a maximum of 100 points per request
+    args_list = []
+    for i in range(0, len(points), batch_size):
+        idx_list = list(range(i, min(i + batch_size, len(points))))
+        batch_points = points[i : i + batch_size]
+        args_list.append((idx_list, batch_points, api_key))
+
+    snapped_points = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(
+            tqdm(
+                executor.map(_get_nearest_points_on_road_batch_helper, args_list),
+                total=len(args_list),
+                desc="Snapping points to roads (batched)",
+            )
+        )
+
+    # Flatten results and fill snapped_points dict
+    for batch in results:
+        for idx, snapped_point in batch:
+            snapped_points[idx] = snapped_point
+
+    # Ensure output order matches input
+    snapped_points_series = gpd.GeoSeries(
+        [snapped_points.get(i, None) for i in range(len(points))], index=gdf.index
+    )
+
+    return snapped_points_series
+
+
+### OLD functions for reference, not used in the current implementation ###
+def get_nearest_point_on_road_old(point: Point, api_key: str) -> Point | None:
+    """
+    Retrieves the nearest point on the road for a given point using the Google Roads API.
+
+    Args:
+        point (Point): The point for which to find the nearest point on the road.
+        api_key (str): Your Google Roads API key.
+
+    Returns:
+        Point: The nearest point on the road, or None if no point is found.
+
+    """
+    url = f"https://roads.googleapis.com/v1/nearestRoads?points={point.y},{point.x}&key={api_key}"
+    response = requests.get(url)
+    snapped_point = response.json().get("snappedPoints", [{}])[0].get("location")
+    return (
+        Point(snapped_point["longitude"], snapped_point["latitude"])
+        if snapped_point
+        else None
+    )
+
+
+def snap_point_to_road_old(args):
+    """Helper function to snap a point to the nearest road."""
+    idx, point, api_key = args
+    try:
+        snapped_point = get_nearest_point_on_road_old(point, api_key)
+        return idx, snapped_point
+    except Exception as e:
+        print(f"Error snapping point at index {idx}: {str(e)}")
+        return idx, None
+
+
+def snap_points_to_roads_parallel_old(gdf, api_key, max_workers=10) -> gpd.GeoSeries:
+    """
+    Snap all points in a GeoDataFrame to the nearest road using parallel processing.
+
+    Args:
+        gdf: GeoDataFrame containing point geometries
+        api_key: Google Roads API key
+        max_workers: Number of parallel workers
+
+    Returns:
+        GeoSeries with snapped geometries
+    """
+    args_list = [(idx, point, api_key) for idx, point in enumerate(gdf.geometry)]
+
+    snapped_points = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(
+            tqdm(
+                executor.map(snap_point_to_road_old, args_list),
+                total=len(args_list),
+                desc="Snapping points to roads",
+            )
+        )
+
+    for idx, snapped_point in results:
+        snapped_points[idx] = snapped_point
+    snapped_points_series = gpd.GeoSeries(snapped_points)
+
+    return snapped_points_series
